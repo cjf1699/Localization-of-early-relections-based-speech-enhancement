@@ -176,10 +176,30 @@ class HOANet(nn.Module):
         return out
 
 
+class SENet(nn.Module):
+    def __init__(self):
+        super(SENet, self).__init__()
+        self.layer1 = nn.Sequential(
+                            nn.Conv1d(5, 16, kernel_size=3, stride=1, padding=1),
+                            nn.BatchNorm1d(16),
+                            nn.ReLU(),
+                            nn.MaxPool1d(kernel_size=2, stride=2))
+        self.fc = nn.Linear(16*80, c.frame_size)
+
+    def forward(self, x):
+        out = self.layer1(x)
+        # print('经卷积层之后：', out.shape)
+        out = out.reshape(out.size(0), -1)
+        # print('reshape之后：', out.shape)
+        out = self.fc(out)
+        # print('经全连接之后：', out.shape)
+        return out
+
 if __name__ == '__main__':
-    data = torch.randn(128, 64, 22, 255)
-   #  model = HOANet(input_shape=(255, 20, 50))
-    block = ResBlock(256, 256)
-    model = ResNet(block, numOfResBlock=5, input_shape=(64, 22, 255), data_type='stft')
+    data = torch.randn(128, 5, 160)
+    #model = HOANet(input_shape=(255, 20, 50))
+    #block = ResBlock(256, 256)
+    #model = ResNet(block, numOfResBlock=5, input_shape=(64, 22, 255), data_type='stft')
+    model = SENet()
     out = model(data)
     print(out.shape)

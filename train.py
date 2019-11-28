@@ -4,11 +4,10 @@ import torch.utils.data as data
 import logging
 import config as c
 import argparse
+import warnings
 import random
-import time
 from net import HOANet, ResBlock, ResNet
-from scipy.io import wavfile as wav
-from DataPreprocessor import DataProcessor, HOADataSet
+from DataPreprocessor import HOADataSet
 from draw import *
 from handler import peak_detection, cal_precision, cal_recall
 
@@ -16,7 +15,7 @@ from handler import peak_detection, cal_precision, cal_recall
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--name', type=str,
-                    default=time.asctime(time.localtime(time.time())),
+                    default='test',
                     help='The name or function of the current task')
 parser.add_argument('--ser', type=str,
                     default='sh',  # sk : shengke 1 hao, sh: shrc
@@ -28,8 +27,14 @@ parser.add_argument('--net', type=str,
 #                     default=0,  # sk : shengke 1 hao, sh: shrc
 #                     help='set a snr for validation')
 parser.add_argument('--data', type=str,
-                    default='stft',  # sk : shengke 1 hao, sh: shrc
+                    default='hoa',  # sk : shengke 1 hao, sh: shrc
                     help='use hoa data or stft data')
+parser.add_argument('--issp', type=int,
+                    default='1',  # sk : shengke 1 hao, sh: shrc
+                    help='speech or not')
+parser.add_argument('--debug', type=int,
+                    default=0,
+                    help='debug mode or not')
 parser.add_argument('--gpu', type=int,
                     default=1,  # sk : shengke 1 hao, sh: shrc
                     help='use GPU or CPU')
@@ -40,24 +45,17 @@ CUR_TASK = args.name
 SERVER = args.ser
 NET_TYPE = args.net
 # SNR = args.snr
+SPEECH = args.issp
 DATA_TYPE = args.data
 DEVICE_TYPE = args.gpu
-
-# ================= set parameters by hand, for debug mode ===================
-'''
-CUR_TASK = 'test'
-SERVER = 'sh'
-NET_TYPE = 'res'
-DATA_TYPE = 'hoa'
-DEVICE_TYPE= 1
-'''
+DEBUG = args.debug
 # some directory and  Device configuration
 if SERVER == 'sk':
-    DATA_PATH = '/gpfs/share/home/1801213778/Dataset/random_reverb_wavs/'
+    DATA_PATH = '/gpfs/share/home/1801213778/Dataset/random_reverb_wavs/' + ('speech/' if SPEECH == 1 else '')
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') if DEVICE_TYPE == 1 else torch.device('cpu')
 elif SERVER == 'sh':
-    DATA_PATH = '/mnt/hd8t/cjf/random_reverb_wavs/'
-    device = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu') if DEVICE_TYPE == 1 else torch.device('cpu')
+    DATA_PATH = '/mnt/hd8t/cjf/random_reverb_wavs/' + ('speech/' if SPEECH == 1 else '')
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu') if DEVICE_TYPE == 1 else torch.device('cpu')
 elif SERVER == 'ship':
     DATA_PATH = '/data/cjf/'
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu') if DEVICE_TYPE == 1 else torch.device('cpu')
@@ -71,9 +69,9 @@ running_lr = False
 decay = 0.04  # lr decay
 numOfEth = 3
 snr_list = [10, 5, 0, -5]
-TRAIN_FILE_NUM = 50 * 72
-VALID_FILE_NUM = 20 * 72
-TEST_FILE_NUM = 20 * 72
+TRAIN_FILE_NUM = 50 * 72 if SPEECH == 0 else 3340
+VALID_FILE_NUM = 20 * 72 if SPEECH == 0 else 840
+TEST_FILE_NUM = 20 * 72 if SPEECH == 0 else 500
 bottle = False
 lr = 0.001  # + list(1.0 / np.random.randint(1000, 2000, size=2))
 weight_decay = 0.0001
@@ -84,7 +82,7 @@ name = CUR_TASK + '_bot' + str(int(bottle)) + \
 # ========================================================
 # recording config
 logging.basicConfig(level=logging.DEBUG,
-                    filename=name + 'test.log',
+                    filename=name + '.log',
                     filemode='w',
                     datefmt='%Y/%m/%d %H:%M:%S',
                     format='%(asctime)s - %(name)s - %(levelname)s - %(lineno)d - %(module)s - %(message)s')
@@ -101,7 +99,7 @@ input_shape_dict = {'hoa hoa': (c.n_freq, c.frames_per_block + 2, c.hoa_num * 2)
                     }
 input_shape = input_shape_dict[' '.join((NET_TYPE, DATA_TYPE))]
 
-index_offset_dict = {10: 0, 5: 125, 0: 250, -5: 375}
+index_offset_dict = {10: 0, 5: int(TEST_FILE_NUM / 4), 0: int(TEST_FILE_NUM / 2), -5: int(TEST_FILE_NUM / 4 * 3)}
 
 
 def update_lr(optimizer, lr):
@@ -173,7 +171,7 @@ def train_and_valid(learning_rate=lr, weight_decay=weight_decay,
         for idx, train_idx in enumerate(train_file_order):
             if len(train_data) < batch_size:
                 train_data_temp = HOADataSet(path=DATA_PATH + ('' if DATA_TYPE == 'hoa' else 'STFT/') + 'tr/',
-                                             index=train_idx + 1, data_type=DATA_TYPE, is_speech=True)
+                                             index=train_idx + 1, data_type=DATA_TYPE, is_speech=SPEECH)
                 if len(train_data) == 0:
                     train_data = train_data_temp
                 else:
@@ -185,8 +183,8 @@ def train_and_valid(learning_rate=lr, weight_decay=weight_decay,
                                            shuffle=True)
 
             for step, (examples, labels) in enumerate(train_loader):
-                if step == 1:
-                    break
+                # if step == 1:
+                #     break
                 train_step_cnt += 1
                 # print(train_step_cnt)
                 examples = examples.float().to(device)
@@ -204,7 +202,7 @@ def train_and_valid(learning_rate=lr, weight_decay=weight_decay,
                             .format(epoch + 1, num_epochs, train_step_cnt, train_loss.item()))
 
             train_data = HOADataSet(path=DATA_PATH + ('' if DATA_TYPE == 'hoa' else 'STFT/') + 'tr/',
-                                    index=train_idx + 1, data_type=DATA_TYPE, is_speech=True)
+                                    index=train_idx + 1, data_type=DATA_TYPE, is_speech=SPEECH)
 
         if plot:
             train_loss_curve.append(train_loss_per_epoch / train_step_cnt)
@@ -221,7 +219,7 @@ def train_and_valid(learning_rate=lr, weight_decay=weight_decay,
             for idx, valid_idx in enumerate(valid_file_order):
                 if len(valid_data) < batch_size:
                     valid_data_temp = HOADataSet(path=DATA_PATH + ('' if DATA_TYPE == 'hoa' else 'STFT/') + 'cv/',
-                                                 index=valid_idx + 1, data_type=DATA_TYPE, is_speech=True)
+                                                 index=valid_idx + 1, data_type=DATA_TYPE, is_speech=SPEECH)
                     if len(valid_data) == 0:
                         valid_data = valid_data_temp
                     else:
@@ -243,6 +241,9 @@ def train_and_valid(learning_rate=lr, weight_decay=weight_decay,
                     valid_loss_per_epoch += valid_loss.item()
 
                     logger.info('The loss for the current batch:{}'.format(valid_loss))
+                
+                valid_data = HOADataSet(path=DATA_PATH + ('' if DATA_TYPE == 'hoa' else 'STFT/') + 'cv/',
+                                    index=valid_idx + 1, data_type=DATA_TYPE, is_speech=SPEECH)
 
             avr_valid_loss = valid_loss_per_epoch / valid_step_cnt
 
@@ -252,18 +253,13 @@ def train_and_valid(learning_rate=lr, weight_decay=weight_decay,
             if avr_valid_loss < best_loss:
                 best_loss = avr_valid_loss
                 best_epoch, best_model = epoch, model.state_dict()
-            # checkpoint_model = model.state_dict()
-            # torch.save({
-            #         'state_dict': checkpoint_model,
-            #         'loss': best_loss
-            # }, 'models/' + CUR_TASK + 'checkpoint_epo' + str(epoch) + '.tar')
 
     # end for loop of epoch
     torch.save({
         'epoch': best_epoch,
         'state_dict': best_model,
         'loss': best_loss,
-    }, './ckpoint_' + CUR_TASK + '_bot' + str(int(if_bottleneck)) +
+    }, './models/ckpoint_' + CUR_TASK + '_bot' + str(int(if_bottleneck)) +
        '_lr' + str(learning_rate) + '_wd' + str(weight_decay) + '_#res' + str(num_of_res) + '.tar')
 
     logger.info('best epoch:{}, valid loss:{}'.format(best_epoch, best_loss))
@@ -280,8 +276,7 @@ def train_and_valid(learning_rate=lr, weight_decay=weight_decay,
 # verify the model checkpoint
 if __name__ == '__main__':
     # for random searching hyper
-
-    # train_and_valid()
+    train_and_valid()
 
     logger.info('\n\n====================Training finished=========================')
     logger.info('========================Validation on valid set====================')
@@ -298,9 +293,9 @@ if __name__ == '__main__':
     model.load_state_dict(checkpoint['state_dict'])
     criterion = nn.MSELoss()
     model.eval()
-    f = open(name + 'test.txt', 'w')
-    file = open('anechoic_mono_te.flist', 'r')
-    all_test_files = file.readlines()
+    f = open(name + '.txt', 'w')
+    file_ = open('anechoic_mono_speech_tt.flist', 'r')
+    all_test_files = file_.readlines()
     with torch.no_grad():
         for snr in snr_list:
             offset = index_offset_dict[snr]
@@ -310,7 +305,7 @@ if __name__ == '__main__':
 
             valid_step_cnt = 0
             total_valid_loss = 0.0
-            no_peak = 0  # 记录无峰值输出（全0输出）的样本个数
+            no_peak = np.zeros(c.scan_num)  # 记录无峰值输出（全0输出）的样本个数
             total = 0  # 验证集的总样本个数
 
             total_correct_each = np.zeros((360, 3))
@@ -318,11 +313,11 @@ if __name__ == '__main__':
             total_peaks_each = np.zeros(360)
             total_predict_each = np.zeros(360)
 
-            for idx in range(offset + 1, offset + 361):
-                direct_label = int(all_test_files[idx].strip().split(' ')[1]) - 1
-                _str = ('' if DATA_TYPE == 'hoa' else 'STFT/') + 'te/'
-                valid_data = HOADataSet(path=DATA_PATH + _str,
-                                        index=idx, data_type=DATA_TYPE, is_speech=False)
+            for idx in range(offset + 1, int(offset + TEST_FILE_NUM / 4 + 1)):
+                direct_label = int(all_test_files[idx - 1].strip().split(' ')[1]) - 1
+                _str = ('' if DATA_TYPE == 'hoa' else 'STFT/') + 'tt/'
+                valid_data = HOADataSet(path=DATA_PATH + ('' if DATA_TYPE == 'hoa' else 'STFT/') + 'tt/',
+                                        index=idx, data_type=DATA_TYPE, is_speech=SPEECH)
                 valid_loader = data.DataLoader(dataset=valid_data,
                                                batch_size=1,
                                                shuffle=True)
@@ -336,11 +331,22 @@ if __name__ == '__main__':
                     valid_loss = criterion(outputs, labels.squeeze())
                     total_valid_loss += valid_loss.item()
 
-                    real_peaks = peak_detection(labels.squeeze(), plot=False)
-                    pred_peaks = peak_detection(outputs.squeeze(), plot=False)
+                    real_peaks = peak_detection(labels.squeeze())
+                    pred_peaks = peak_detection(outputs.squeeze())
 
                     if len(pred_peaks) == 0:
-                        no_peak += 1
+                        no_peak[direct_label] += 1
+                        warnings.warn('没有峰值！\n')
+                        '''
+                        plt.figure()
+                        plt.plot(outputs.squeeze().cpu().detach().numpy())
+                        term = 'STFT/' if DATA_TYPE == 'stft' else ''
+                        plt.savefig(
+                                './picture/' + term + 'abnormal{}deg_{}_{}.jpg'.format(direct_label * 5,
+                                                                           no_peak[direct_label],
+                                                                           real_peaks))
+                        plt.close()
+                        '''
                         # logger.info('no peak, direct sound at {}'.format((int(label) - 1) * 5))
                         continue
 
@@ -352,10 +358,11 @@ if __name__ == '__main__':
                     total_peaks += len(real_peaks)
                     total_predict += len(pred_peaks)
 
-                    total_correct_each[direct_label] += prec * len(pred_peaks)
-                    total_recall_each[direct_label] += recall * len(real_peaks)
-                    total_peaks_each[direct_label] += len(real_peaks)
-                    total_predict_each[direct_label] += len(pred_peaks)
+                    if DEBUG:
+                        total_correct_each[direct_label] += prec * len(pred_peaks)
+                        total_recall_each[direct_label] += recall * len(real_peaks)
+                        total_peaks_each[direct_label] += len(real_peaks)
+                        total_predict_each[direct_label] += len(pred_peaks)
 
                     logger.info('====================================')
                     # logger.info('直达声处于{}°'.format((int(label) - 1) * 5))
@@ -365,24 +372,26 @@ if __name__ == '__main__':
                     logger.info('The loss for the current batch:{}'.format(valid_loss))
 
             avr_valid_loss = total_valid_loss / valid_step_cnt
+            assert total == valid_step_cnt
+            # assert total_predict_each.sum() == total_predict
+            # assert total_peaks_each.sum() == total_peaks
+            # assert (total_recall_each.sum(axis=0) == total_recall).all()
+            # assert (total_correct_each.sum(axis=0) == total_correct).all()
 
             _prec = total_correct / total_predict
             _recall = total_recall / total_peaks
-            prec_each = total_correct_each / total_predict_each[:, np.newaxis]
-            recall_each = total_recall_each / total_peaks_each[:, np.newaxis]
-            np.save('pAndr_of_each_deg_snr_{}.npy'.format(snr), {'p':prec_each, 'r':recall_each})
-
-            logger.info(
-                'SNR:{}dB, Epoch {}, the average precision on the valid set:{}'.format(snr, checkpoint['epoch'], _prec))
-            logger.info(
-                'SNR:{}dB, Epoch {}, the average recall on the valid set:{}'.format(snr, checkpoint['epoch'], _recall))
-            logger.info('SNR:{}dB, no-peak examples:[{}/{}]'.format(snr, no_peak, total))
+            if DEBUG:
+                prec_each = total_correct_each / total_predict_each[:, np.newaxis]
+                recall_each = total_recall_each / total_peaks_each[:, np.newaxis]
+                term = 'STFT' if DATA_TYPE == 'stft' else ''
+                np.save(term + 'prec_rec_for_each_snr_{}.npy'.format(snr), {'p': prec_each, 'r': recall_each},
+                        allow_pickle=True)
+                np.save(term + 'np_peak_for_each_deg_snr{}.npy'.format(snr), no_peak, allow_pickle=True)
 
             f.write('SNR:{}dB, Epoch {}, the average precision on the valid set:{}\n'.format(snr, checkpoint['epoch'],
                                                                                              _prec))
             f.write('SNR:{}dB, Epoch {}, the average recall on the valid set:{}\n'.format(snr, checkpoint['epoch'],
                                                                                           _recall))
-            f.write('SNR:{}dB, no-peak examples:[{}/{}]\n'.format(snr, no_peak, total))
+            f.write('SNR:{}dB, no-peak examples:[{}/{}]\n'.format(snr, int(no_peak.sum()), total))
     f.close()
-    file.close()
-
+    file_.close()

@@ -4,7 +4,7 @@ from numpy import *
 import numpy as np
 from scipy.special import hankel2
 import config as c
-
+from scipy.io import savemat
 # REF: 3D Sound Field Recording with Higher Order Ambisonics -
 # Objective Measurements and Validation of Spherical Microphone
 
@@ -198,7 +198,9 @@ def get_p_vector(freq, azi, el):
 
 
 if __name__ == '__main__':
-    for i in range(5):
-        for j in range(-i, i+1):
-            print(spheric_harmonics_function(i, j, 2*np.pi/3, 0))
-
+    #for i in range(5):
+    #    for j in range(-i, i+1):
+    #        print(spheric_harmonics_function(i, j, 2*np.pi/3, 0))
+    res = get_y()
+    savemat('temp.mat', {'data': res})
+    

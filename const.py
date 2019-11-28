@@ -2,7 +2,7 @@
 from __future__ import print_function
 from __future__ import division
 import numpy as np
-
+from scipy.io import savemat
 az_bias_car0 = 0
 
 chan_map0 = np.asarray(list(range(32)))  # no adjust
@@ -81,3 +81,8 @@ mic_position_32mic = np.asarray([               # (90° - 仰角， 水平角)
     (1.15425775294615, 0.942240410265476)])
 array_radius_eigenmike = 0.042
 array_radius_32mic = 0.05
+
+
+if __name__ == '__main__':
+    savemat('mic_wo.mat', {'mic': mic_position_32mic})
+
